@@ -1,0 +1,10 @@
+# comment to bump caches
+einops==0.6.0
+gradio==3.19.1
+librosa==0.9.2
+progressbar==2.5
+scipy==1.10.1
+soundfile==0.12.1
+tqdm==4.64.1
+transformers
+ftfy
