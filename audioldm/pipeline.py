@@ -7,14 +7,11 @@ from torch import autocast
 from tqdm import tqdm, trange
 
 from audioldm import LatentDiffusion, seed_everything
-from audioldm.utils import default_audioldm_config
+from audioldm.utils import default_audioldm_config, get_duration, get_bit_depth, get_metadata, download_checkpoint
 from audioldm.audio import wav_to_fbank, TacotronSTFT, read_wav_file
 from audioldm.latent_diffusion.ddim import DDIMSampler
 from einops import repeat
-
-CACHE_DIR = os.getenv(
-    "AUDIOLDM_CACHE_DIR",
-    os.path.join(os.path.expanduser("~"), ".cache/audioldm"))
+import os
 
 def make_batch_for_text_to_audio(text, waveform=None, fbank=None, batchsize=1):
     text = [text] * batchsize
@@ -49,11 +46,22 @@ def make_batch_for_text_to_audio(text, waveform=None, fbank=None, batchsize=1):
     )
     return batch
 
+def round_up_duration(duration):
+    return int(round(duration/2.5) + 1) * 2.5
 
 def build_model(
-    ckpt_path=os.path.join(CACHE_DIR, "audioldm-s-full.ckpt"),
+    ckpt_path=None,
     config=None,
+    model_name="audioldm-s-full"
 ):
+    print("Load AudioLDM: %s", model_name)
+    
+    if(ckpt_path is None):
+        ckpt_path = get_metadata()[model_name]["path"]
+    
+    if(not os.path.exists(ckpt_path)):
+        download_checkpoint(model_name)
+
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
     else:
@@ -63,7 +71,7 @@ def build_model(
         assert type(config) is str
         config = yaml.load(open(config, "r"), Loader=yaml.FullLoader)
     else:
-        config = default_audioldm_config()
+        config = default_audioldm_config(model_name)
 
     # Use text as condition instead of using waveform during training
     config["model"]["params"]["device"] = device
@@ -109,7 +117,6 @@ def text_to_audio(
     config=None,
 ):
     seed_everything(int(seed))
-    
     waveform = None
     if(original_audio_file_path is not None):
         waveform = read_wav_file(original_audio_file_path, int(duration * 102.4) * 160)
@@ -152,6 +159,23 @@ def style_transfer(
     else:
         device = torch.device("cpu")
 
+    assert original_audio_file_path is not None, "You need to provide the original audio file path"
+    
+    audio_file_duration = get_duration(original_audio_file_path)
+    
+    assert get_bit_depth(original_audio_file_path) == 16, "The bit depth of the original audio file %s must be 16" % original_audio_file_path
+    
+    # if(duration > 20):
+    #     print("Warning: The duration of the audio file %s must be less than 20 seconds. Longer duration will result in Nan in model output (we are still debugging that); Automatically set duration to 20 seconds")
+    #     duration = 20
+    
+    if(duration >= audio_file_duration):
+        print("Warning: Duration you specified %s-seconds must equal or smaller than the audio file duration %ss" % (duration, audio_file_duration))
+        duration = round_up_duration(audio_file_duration)
+        print("Set new duration as %s-seconds" % duration)
+
+    # duration = round_up_duration(duration)
+    
     latent_diffusion = set_cond_text(latent_diffusion)
 
     if config is not None:
@@ -161,7 +185,7 @@ def style_transfer(
         config = default_audioldm_config()
 
     seed_everything(int(seed))
-    latent_diffusion.latent_t_size = duration_to_latent_t_size(duration)
+    # latent_diffusion.latent_t_size = duration_to_latent_t_size(duration)
     latent_diffusion.cond_stage_model.embed_mode = "text"
 
     fn_STFT = TacotronSTFT(
@@ -182,7 +206,8 @@ def style_transfer(
     init_latent = latent_diffusion.get_first_stage_encoding(
         latent_diffusion.encode_first_stage(mel)
     )  # move to latent space, encode and sample
-
+    if(torch.max(torch.abs(init_latent)) > 1e2):
+        init_latent = torch.clip(init_latent, min=-10, max=10)
     sampler = DDIMSampler(latent_diffusion)
     sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=1.0, verbose=False)
 
@@ -199,11 +224,9 @@ def style_transfer(
                     )
 
                 c = latent_diffusion.get_learned_conditioning([prompts] * batchsize)
-
                 z_enc = sampler.stochastic_encode(
                     init_latent, torch.tensor([t_enc] * batchsize).to(device)
                 )
-
                 samples = sampler.decode(
                     z_enc,
                     c,
@@ -211,9 +234,12 @@ def style_transfer(
                     unconditional_guidance_scale=guidance_scale,
                     unconditional_conditioning=uc,
                 )
-
+                # x_samples = latent_diffusion.decode_first_stage(samples) # Will result in Nan in output
+                # print(torch.sum(torch.isnan(samples)))
                 x_samples = latent_diffusion.decode_first_stage(samples)
-
+                # print(x_samples)
+                x_samples = latent_diffusion.decode_first_stage(samples[:,:,:-3,:])
+                # print(x_samples)
                 waveform = latent_diffusion.first_stage_model.decode_to_waveform(
                     x_samples
                 )

@@ -31,7 +31,7 @@ URL = "https://github.com/haoheliu/audioldm"
 EMAIL = "haoheliu@gmail.com"
 AUTHOR = "Haohe Liu"
 REQUIRES_PYTHON = ">=3.7.0"
-VERSION = "0.0.15"
+VERSION = "0.0.21"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
@@ -39,6 +39,7 @@ REQUIRED = [
     "gradio",
     "pyyaml",
     "einops",
+    "chardet",
     "numpy<=1.23.5",
     "soundfile",
     "librosa==0.9.2",
