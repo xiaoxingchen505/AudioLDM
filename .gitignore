@@ -6,3 +6,4 @@ output
 *temp.py
 *.wav
 gradio_cached_examples
+ckpt/ldm_trimmed.ckpt
